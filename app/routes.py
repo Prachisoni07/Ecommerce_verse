@@ -1,8 +1,8 @@
 from flask import request, jsonify
 import jwt
-import datetime
+import datetime 
 import hashlib 
-from .models import User, Product
+from .models import User, Product, Order
 from app import db
 
 SECRET_KEY = '09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d7e9'
@@ -135,7 +135,7 @@ def register_routes(app):
 
         return jsonify({"product": product_data})
     
-    @app.route('/product/<int:product_id>', methods=['PUT'])
+    @app.route('/update_product/<int:product_id>', methods=['PUT'])
     def update_product(product_id):
         token = request.headers.get('Authorization')
         if not token:
@@ -172,3 +172,92 @@ def register_routes(app):
             return jsonify({"error": "Token has expired"}), 401
         except jwt.InvalidTokenError as e:
             return jsonify({"error": "Invalid token"}), 401
+        
+    @app.route('/delete_product/<int:product_id>', methods=['DELETE'])
+    def delete_product(product_id):
+        token = request.headers.get('Authorization')
+        if not token:
+                return jsonify({"error": "Token is missing"}), 401
+
+        try:
+                if token.startswith("Bearer "):
+                    token = token.split(" ")[1]
+                else:
+                    return jsonify({"error": "Invalid token format"}), 401
+
+                decoded_token = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+                user_role = decoded_token.get('role')
+
+                if user_role != 'seller':
+                    return jsonify({"error": "Only sellers can delete products"}), 403
+
+                product = Product.query.get_or_404(product_id)
+                db.session.delete(product)
+                db.session.commit()
+
+                return jsonify({"message": "Product deleted successfully"})
+
+        except jwt.ExpiredSignatureError:
+                return jsonify({"error": "Token has expired"}), 401
+        except jwt.InvalidTokenError as e:
+                return jsonify({"error": "Invalid token"}), 401
+            
+            
+    @app.route('/place_order', methods=['POST'])
+    def place_order():
+        token = request.headers.get('Authorization')
+
+        if not token:
+            return jsonify({"error": "Token is missing"}), 401
+
+        try:
+            if token.startswith("Bearer "):
+                token = token.split(" ")[1]
+            else:
+                return jsonify({"error": "Invalid token format"}), 401
+
+            decoded_token = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+            user_role = decoded_token.get('role')
+            username = decoded_token.get('username') 
+            
+            if user_role != 'buyer':
+                return jsonify({"error": "Only buyers can place orders"}), 403
+            user=User.query.filter(username == User.username).first()
+            
+            data = request.get_json()
+            product_id = data.get('product_id')
+            quantity = data.get('quantity')
+
+            product = Product.query.filter(product_id == Product.id ).first()
+            if not product:
+                return jsonify({"error": "Product not found"}), 404
+
+            new_order = Order(
+                product_id=product.id,
+                buyernamed=username,
+                quantity=quantity,
+                order_date=datetime.datetime.utcnow(),
+                status="pending"
+            )
+            print(new_order.product_id,"aghlkhgfdssdfghjhgfdsdfghjj")
+            db.session.add(new_order)
+            db.session.commit()
+
+            return jsonify({
+                "message": "Order placed successfully",
+                "order": {
+                    "id": new_order.id,
+                    "product_name": product.name,
+                    "quantity": new_order.quantity,
+                    "status": new_order.status,
+                    "order_date": new_order.order_date
+                }
+            }), 201
+
+        except jwt.ExpiredSignatureError:
+            return jsonify({"error": "Token has expired"}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({"error": "Invalid token"}), 401
+    
+    
+    

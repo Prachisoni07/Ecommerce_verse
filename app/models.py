@@ -27,6 +27,19 @@ class Product(db.Model):
     description = db.Column(db.String(120),nullable =False)
     price = db.Column(db.Integer,nullable = False) 
     user_role = db.Column(db.String(80), db.ForeignKey('user.role'), nullable=False)
+    
+    
+class Order(db.Model):
+    __tablename__ = 'orders'
+    id = db.Column(db.Integer, primary_key=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
+    buyernamed = db.Column(db.String, db.ForeignKey('user.username'), nullable=False)
+    quantity = db.Column(db.Integer, nullable=False)
+    order_date = db.Column(db.DateTime, default=datetime.utcnow)
+    status = db.Column(db.String(20), default='pending')
+
+    def __repr__(self):
+        return f"<Order {self.id}>"
 
 
 
