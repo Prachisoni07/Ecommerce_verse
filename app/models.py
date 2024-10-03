@@ -26,14 +26,14 @@ class Product(db.Model):
     name = db.Column(db.String(80), nullable = False)
     description = db.Column(db.String(120),nullable =False)
     price = db.Column(db.Integer,nullable = False) 
-    user_role = db.Column(db.String(80), db.ForeignKey('user.role'), nullable=False)
+    user_id = db.Column(db.String(80), db.ForeignKey('user.id'), nullable=False)
     
     
 class Order(db.Model):
     __tablename__ = 'orders'
     id = db.Column(db.Integer, primary_key=True)
     product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
-    buyernamed = db.Column(db.String, db.ForeignKey('user.username'), nullable=False)
+    buyername = db.Column(db.String, db.ForeignKey('user.username'), nullable=False)
     quantity = db.Column(db.Integer, nullable=False)
     order_date = db.Column(db.DateTime, default=datetime.utcnow)
     status = db.Column(db.String(20), default='pending')
@@ -42,6 +42,16 @@ class Order(db.Model):
         return f"<Order {self.id}>"
 
 
-
+class Cart(db.Model):
+    __tablename__  = "cart"
     
-       
+    id = db.Column(db.Integer, primary_key = True)
+    buyer_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable = False)
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable = False)
+    quantity = db.Column(db.Integer, nullable = False, default = 1)
+    added_at = db.Column(db.DateTime, default = datetime.utcnow)
+    user = db.relationship('User', backref = 'cart_items')
+    product = db.relationship('Product', backref = 'cart_item')
+    
+    def __repr__(self):
+        return f"<Cart {self.id}, User {self.buyer_id}, Product {self.product_id}>"   
