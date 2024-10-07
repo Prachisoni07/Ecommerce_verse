@@ -1,5 +1,7 @@
 from flask import request, jsonify
-import jwt
+from flask_jwt_extended import (
+        JWTManager, create_access_token, jwt_required, get_jwt_identity
+)
 import datetime 
 import hashlib 
 from .models import User, Product, Order, Cart
@@ -7,7 +9,12 @@ from app import db
 
 SECRET_KEY = '09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d7e9'
 
+jwt = JWTManager()
+
 def register_routes(app):
+    app.config['JWT_SECRET_KEY'] = SECRET_KEY
+    jwt.init_app(app)
+    
     @app.route('/signin', methods=['POST'])
     def sign_in():
         data = request.get_json()
@@ -34,48 +41,29 @@ def register_routes(app):
         data= request.get_json()
         username= data['username']
         hashed_password = data['hashed_password']
-        user = User.query.filter((User.username == username)).one()
+        user = User.query.filter_by(username = username).first()
 
         if user and user.hashed_password == hashlib.sha256(hashed_password.encode()).hexdigest():
-                token = jwt.encode({
+                acess_token = create_access_token(identity={
                     'username' : user.username,
                     'role' : user.role,
-                    "exp" : datetime.datetime.utcnow() + datetime.timedelta(hours=1)
-                },SECRET_KEY, algorithm='HS256')
+                    'user_id':user.id
+                }, expires_delta= datetime.timedelta(hours=1))
 
-                return jsonify({'message': 'Login successful', 'token': token}), 200
+                return jsonify({'message': 'Login successful', 'acess_token': acess_token}), 200
         else:
                 return jsonify({'message': 'Login unsuccessful', 'role': 'seller'}), 400
 
   
                 
     @app.route('/product', methods=['POST'])
+    @jwt_required()
     def create_product():
-      
-        token = request.headers.get('Authorization')
-        
-        if not token:
-            return jsonify({"error": "Token is missing"}), 401
-
-        try:
-            if token.startswith("Bearer "):
-                token = token.split(" ")[1] 
-            else:
-                return jsonify({"error": "Invalid token format"}), 401
-
-            print(f"Extracted Token: {token}") 
-
-           
-            decoded_token = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-            # print(f"Decoded Token: {decoded_token}")  
-
-            user_role = decoded_token.get('role')
-            username = decoded_token.get('username')
-            user= User.query.filter(username == User.username).first()
-            if not user_role:
-                return jsonify({"error": "Token doesn't contain user_role"}), 403
-
-            # Check if the user is a seller
+            current_user = get_jwt_identity()
+            user_role = current_user.get('role')
+            username = current_user.get('username')
+            user= User.query.filter_by(username = username).first()
+            
             if user_role != 'seller':
                 return jsonify({"error": "Only sellers can create products"}), 403
 
@@ -86,7 +74,8 @@ def register_routes(app):
                 name=data['name'],
                 description=data['description'],
                 price=data['price'],
-                user_id=user.id
+                user_id=user.id,
+                stock = data['stock']
             )
             db.session.add(new_product)
             db.session.commit()
@@ -94,17 +83,9 @@ def register_routes(app):
             return jsonify({"message": "Product created successfully", "product": {
                 "name": new_product.name,
                 "description": new_product.description,
-                "price": new_product.price
+                "price": new_product.price, 
+                "stock": new_product.stock
             }}), 201
-
-        except jwt.ExpiredSignatureError:
-            return jsonify({"error": "Token has expired"}), 401
-        except jwt.InvalidTokenError as e:
-            print(f"JWT Decode Error: {str(e)}")
-            return jsonify({"error": "Invalid token"}), 401
-        except IndexError:
-            return jsonify({"error": "Bearer token is not provided properly"}), 401
-
 
 
     @app.route('/products', methods=['GET'])
@@ -117,13 +98,14 @@ def register_routes(app):
                 'id': product.id,
                 'name': product.name,
                 'description': product.description,
-                'price': product.price
+                'price': product.price,
+                'stock':product.stock
             }
             output.append(product_data)
 
         return jsonify({"products": output})
 
-    @app.route('/product/<int:product_id>', methods=['GET'])
+    @app.route('/get_product/<int:product_id>', methods=['GET'])
     
     def get_product(product_id):
         product = Product.query.get_or_404(product_id)
@@ -132,25 +114,17 @@ def register_routes(app):
             'id': product.id,
             'name': product.name,
             'description': product.description,
-            'price': product.price
+            'price': product.price,
+            'stock':product.stock
         }
 
         return jsonify({"product": product_data})
     
     @app.route('/update_product/<int:product_id>', methods=['PUT'])
+    @jwt_required()
     def update_product(product_id):
-        token = request.headers.get('Authorization')
-        if not token:
-            return jsonify({"error": "Token is missing"}), 401
-
-        try:
-            if token.startswith("Bearer "):
-                token = token.split(" ")[1]
-            else:
-                return jsonify({"error": "Invalid token format"}), 401
-
-            decoded_token = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-            user_role = decoded_token.get('role')
+            current_user = get_jwt_identity()
+            user_role = current_user.get('role')
 
             if user_role != 'seller':
                 return jsonify({"error": "Only sellers can update products"}), 403
@@ -161,69 +135,43 @@ def register_routes(app):
             product.name = data.get('name', product.name)
             product.description = data.get('description', product.description)
             product.price = data.get('price', product.price)
+            product.stock = data.get('stock', product.stock)
 
             db.session.commit()
 
             return jsonify({"message": "Product updated successfully", "product": {
                 "name": product.name,
                 "description": product.description,
-                "price": product.price
+                "price": product.price,
+                "stock": product.stock
             }})
-
-        except jwt.ExpiredSignatureError:
-            return jsonify({"error": "Token has expired"}), 401
-        except jwt.InvalidTokenError as e:
-            return jsonify({"error": "Invalid token"}), 401
         
     @app.route('/delete_product/<int:product_id>', methods=['DELETE'])
+    @jwt_required()
     def delete_product(product_id):
-        token = request.headers.get('Authorization')
-        if not token:
-                return jsonify({"error": "Token is missing"}), 401
+        current_user = get_jwt_identity()  
+        
+        # Ensure current_user is a dictionary or has the correct structure
+        user_role = current_user.get('role') if isinstance(current_user, dict) else None
 
-        try:
-                if token.startswith("Bearer "):
-                    token = token.split(" ")[1]
-                else:
-                    return jsonify({"error": "Invalid token format"}), 401
+        if user_role != 'seller':
+            return jsonify({"error": "Only sellers can delete products"}), 403
 
-                decoded_token = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-                user_role = decoded_token.get('role')
-
-                if user_role != 'seller':
-                    return jsonify({"error": "Only sellers can delete products"}), 403
-
-                product = Product.query.get_or_404(product_id )
-                db.session.delete(product)
-                db.session.commit()
-
-                return jsonify({"message": "Product deleted successfully"})
-
-        except jwt.ExpiredSignatureError:
-                return jsonify({"error": "Token has expired"}), 401
-        except jwt.InvalidTokenError as e:
-                return jsonify({"error": "Invalid token"}), 401
+        product = Product.query.get_or_404(product_id)
+        db.session.delete(product)
+        db.session.commit()
             
-            
+        return jsonify({"message": "Product deleted successfully"})
+ 
     
     @app.route('/cart', methods = ['POST'])
+    @jwt_required()
     def add_to_cart():
-        token = request.headers.get('Authorization')
+            current_user = get_jwt_identity()   
         
-        if not token:
-            return jsonify({"error": "Token is missing"}), 401
-        
-        try:
-            if token.startswith("Bearer "):
-                token = token.split(" ")[1]
-            else:
-                return jsonify({"error": "Invalid token format"}), 401
             
-            decoded_token = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-            user_name =  decoded_token.get('username')
-            print(user_name,"dcfvgbhjxdcfgvhbj")
-            user = User.query.filter_by(username = user_name).first()
-            print(user,"xdctfgvhbjnkmdfgcvh")
+            user = User.query.filter_by(username = current_user['username']).first()
+            
             if not user:
                 return jsonify({"error": "User not found"}), 404
             
@@ -238,11 +186,13 @@ def register_routes(app):
             
             cart_item = Cart.query.filter_by(buyer_id = user.id, product_id = product.id).first()
             
-            if cart_item:
-            # If the product is already in the cart, increase the quantity
+            if quantity > product.stock: 
+                return jsonify({"error": "Not Enough Stock Available"}), 404
+            
+            if cart_item :
+               
                 cart_item.quantity += quantity
             else:
-            # If not, create a new cart item
                 new_cart_item = Cart(
                     buyer_id=user.id,
                     product_id=product.id,
@@ -254,30 +204,15 @@ def register_routes(app):
 
             return jsonify({"message": "Product added to cart successfully"}), 201
 
-        except jwt.ExpiredSignatureError:
-            return jsonify({"error": "Token has expired"}), 401
-        except jwt.InvalidTokenError:
-            return jsonify({"error": "Invalid token"}), 401         
-        
         
         
     @app.route('/get_cart', methods=['GET'])
+    @jwt_required()
     def get_cart_items():
-        token = request.headers.get('Authorization')
+            current_user = get_jwt_identity()
+            
 
-        if not token:
-            return jsonify({"error": "Token is missing"}), 401
-
-        try:
-            if token.startswith("Bearer "):
-                token = token.split(" ")[1]
-            else:
-                return jsonify({"error": "Invalid token format"}), 401
-
-            decoded_token = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-            username = decoded_token.get('username')
-
-            user = User.query.filter_by(username=username).first()
+            user = User.query.filter_by(username=current_user['username']).first()
 
             if not user:
                 return jsonify({"error": "User not found"}), 404
@@ -298,125 +233,65 @@ def register_routes(app):
 
             return jsonify({"cart": cart})
 
-        except jwt.ExpiredSignatureError:
-            return jsonify({"error": "Token has expired"}), 401
-        except jwt.InvalidTokenError:
-            return jsonify({"error": "Invalid token"}), 401
-                    
+    @app.route('/remove_item/<int:product_id>', methods=['DELETE'])
+    @jwt_required()
+    def remove_item(product_id):
+            current_user = get_jwt_identity()
+            user =User.query.get(current_user["user_id"])
+            if user.role !='buyer':
+                return jsonify({"message": "Access denied: Sellers cannot remove cart items."}), 403
+            cart_item = Cart.query.filter_by(buyer_id=user.id, product_id=product_id).first()
+            if not cart_item:
+                return jsonify({"message": "Product not found in cart."}), 200
+
+            if cart_item.quantity > 1:
+                cart_item.quantity -= 1
+                db.session.commit()
+                return jsonify({'message': 'Product quantity decreased by 1', 'quantity': cart_item.quantity}), 200
+            else: 
+                db.session.delete(cart_item)
+                db.session.commit()
+                return jsonify({"message: Product removed from cart"})                
+
+    
+    @app.route('/place_order', methods =['POST'])
+    @jwt_required()
+    def place_order_from_card():
+        current_user = get_jwt_identity()
+        user = User.query.filter_by(username = current_user['username']).first()
+        
+        cart_items = Cart.query.filter_by(buyer_id =user.id).all()
+        
+        if not cart_items:
+            return jsonify({"error": "your cart is empty"}), 400
+        
+        total_order_price = 0
+        for item in cart_items:
+            order = Order(
+                buyername = user.username,
+                product_id = item.product_id,
+                quantity = item.quantity,
+                total_price = item.product.price * item.quantity
+           )
+            db.session.add(order)
             
-    # @app.route('/place_order', methods=['POST'])
-    # def place_order():
-    #     token = request.headers.get('Authorization')
-
-    #     if not token:
-    #         return jsonify({"error": "Token is missing"}), 401
-
-    #     try:
-    #         if token.startswith("Bearer "):
-    #             token = token.split(" ")[1]
-    #         else:
-    #             return jsonify({"error": "Invalid token format"}), 401
-
-    #         decoded_token = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-    #         user_role = decoded_token.get('role')
-    #         username = decoded_token.get('username') 
+            for item in cart_items:
+                product = item.product
+                if product.stock - item.quantity >= 0 :
+                    product.stock = product.stock - item.quantity
+                else:
+                    return jsonify({"error": "Not Enough Stock Available"}), 404
+                
             
-    #         if user_role != 'buyer':
-    #             return jsonify({"error": "Only buyers can place orders"}), 403
-    #         user=User.query.filter(username == User.username).first()
+            total_order_price += order.total_price
+            db.session.delete(item)
             
-    #         data = request.get_json()
-    #         product_id = data.get('product_id')
-    #         quantity = data.get('quantity')
-
-    #         product = Product.query.filter(product_id == Product.id ).first()
-    #         if not product:
-    #             return jsonify({"error": "Product not found"}), 404
-
-    #         new_order = Order(
-    #             product_id=product.id,
-    #             buyername=username,
-    #             quantity=quantity,
-    #             order_date=datetime.datetime.utcnow(),
-    #             status="pending"
-    #         )
-    #         print(new_order.product_id,"aghlkhgfdssdfghjhgfdsdfghjj")
-    #         db.session.add(new_order)
-    #         db.session.commit()
-
-    #         return jsonify({
-    #             "message": "Order placed successfully",
-    #             "order": {
-    #                 "id": new_order.id,
-    #                 "product_name": product.name,
-    #                 "quantity": new_order.quantity,
-    #                 "status": new_order.status,
-    #                 "order_date": new_order.order_date
-    #             }
-    #         }), 201
-
-    #     except jwt.ExpiredSignatureError:
-    #         return jsonify({"error": "Token has expired"}), 401
-    #     except jwt.InvalidTokenError:
-    #         return jsonify({"error": "Invalid token"}), 401
+        db.session.commit()
+        
+        return jsonify({"message": "order placed successfully","total_price": total_order_price}) 
+    
+           
+ 
     
     
-    
-    # @app.route('/seller_orders', methods=['GET'])
-    # def get_seller_order_history():
-    #     print("headers:",request.headers)
-    #     token = request.headers.get('Authorization')
-
-    #     if not token:
-    #         return jsonify({"error": "Token is missing"}), 401
-
-    #     try:
-    #         if token.startswith("Bearer "):
-    #             token = token.split(" ")[1]
-    #         else:
-    #             return jsonify({"error": "Invalid token format"}), 401
-
-    #         decoded_token = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-    #         user_role = decoded_token.get('role')
-    #         username = decoded_token.get('username')
-
-    #         # Ensure the user is a seller
-    #         if user_role != 'seller':
-    #             return jsonify({"error": "Only sellers can view order history"}), 403
-
-    #         # Get the seller (user) and their products
-    #         seller = User.query.filter_by(username=username).first()
-    #         if not seller:
-    #             return jsonify({"error": "Seller not found"}), 404
-
-    #         # Get all products for this seller
-    #         seller_products = Product.query.filter_by(seller_id=seller.id).all()  # Assuming there's a `seller_id` field in Product
-    #         if not seller_products:
-    #             return jsonify({"message": "No products found for this seller"}), 404
-
-    #         # Get all orders for seller's products
-    #         product_ids = [product.id for product in seller_products]
-    #         orders = Order.query.filter(Order.product_id.in_(product_ids)).all()
-
-    #         # Prepare the order history response
-    #         order_history = []
-    #         for order in orders:
-    #             product = Product.query.get(order.product_id)
-    #             order_data = {
-    #                 'order_id': order.id,
-    #                 'product_name': product.name,
-    #                 'buyer': order.buyernamed,
-    #                 'quantity': order.quantity,
-    #                 'order_date': order.order_date,
-    #                 'status': order.status
-    #             }
-    #             order_history.append(order_data)
-
-    #         return jsonify({"orders": order_history}), 200
-
-    #     except jwt.ExpiredSignatureError:
-    #         return jsonify({"error": "Token has expired"}), 401
-    #     except jwt.InvalidTokenError:
-    #         return jsonify({"error": "Invalid token"}), 401
-    #     except Exception as e:
-    #         return jsonify({"error": str(e)}), 500
+   
